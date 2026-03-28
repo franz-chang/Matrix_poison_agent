@@ -1,0 +1,88 @@
+{
+  "interactions": "/root/matrix-poison/data/ml1m/interactions.csv",
+  "items": "/root/matrix-poison/data/ml1m/items.csv",
+  "num_users": 6040,
+  "num_items": 3706,
+  "models": {
+    "bpr": {
+      "checkpoint": "checkpoints/target_models/ml1m/bpr_baseline.pt",
+      "train_config": {
+        "model_name": "bpr",
+        "embedding_dim": 64,
+        "lightgcn_layers": 2,
+        "sasrec_max_len": 50,
+        "sasrec_heads": 2,
+        "sasrec_layers": 2,
+        "epochs": 50,
+        "batch_size": 4096,
+        "lr": 0.001,
+        "weight_decay": 1e-06,
+        "seed": 42,
+        "device": "cuda",
+        "positive_threshold": 4.0,
+        "use_explicit_neg": false,
+        "explicit_neg_bias": 0.8
+      }
+    },
+    "neumf": {
+      "checkpoint": "checkpoints/target_models/ml1m/neumf_baseline.pt",
+      "train_config": {
+        "model_name": "neumf",
+        "embedding_dim": 64,
+        "lightgcn_layers": 2,
+        "sasrec_max_len": 50,
+        "sasrec_heads": 2,
+        "sasrec_layers": 2,
+        "epochs": 50,
+        "batch_size": 4096,
+        "lr": 0.001,
+        "weight_decay": 1e-06,
+        "seed": 43,
+        "device": "cuda",
+        "positive_threshold": 4.0,
+        "use_explicit_neg": false,
+        "explicit_neg_bias": 0.8
+      }
+    },
+    "lightgcn": {
+      "checkpoint": "checkpoints/target_models/ml1m/lightgcn_baseline.pt",
+      "train_config": {
+        "model_name": "lightgcn",
+        "embedding_dim": 64,
+        "lightgcn_layers": 2,
+        "sasrec_max_len": 50,
+        "sasrec_heads": 2,
+        "sasrec_layers": 2,
+        "epochs": 50,
+        "batch_size": 4096,
+        "lr": 0.001,
+        "weight_decay": 1e-06,
+        "seed": 44,
+        "device": "cuda",
+        "positive_threshold": 4.0,
+        "use_explicit_neg": false,
+        "explicit_neg_bias": 0.8
+      }
+    },
+    "sasrec": {
+      "checkpoint": "checkpoints/target_models/ml1m/sasrec_baseline.pt",
+      "train_config": {
+        "model_name": "sasrec",
+        "embedding_dim": 64,
+        "lightgcn_layers": 2,
+        "sasrec_max_len": 50,
+        "sasrec_heads": 2,
+        "sasrec_layers": 2,
+        "epochs": 50,
+        "batch_size": 2048,
+        "lr": 0.001,
+        "weight_decay": 1e-06,
+        "seed": 45,
+        "device": "cuda",
+        "positive_threshold": 4.0,
+        "use_explicit_neg": false,
+        "explicit_neg_bias": 0.8
+      }
+    }
+  }
+}

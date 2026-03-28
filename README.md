@@ -82,3 +82,22 @@ python scripts/run_matrix_poison.py \
   如果需要接入真实 LLM API，可在 `matrix_poison/agent.py` 的 `analysis_phase` 和 `self_evolve` 扩展提示优化逻辑。
 - 默认遵循论文的灰盒设定：只基于可见交互数据训练本地 shadow/victim，不访问目标系统梯度与参数。
 
+
+## Train Baseline Target Models
+
+Use the following command to pre-train baseline target-model parameters and save them under the project directory:
+
+```bash
+python scripts/train_target_baselines.py \
+  --interactions data/ml1m/interactions.csv \
+  --items data/ml1m/items.csv \
+  --output-dir checkpoints/target_models/ml1m
+```
+
+This produces:
+
+- `checkpoints/target_models/ml1m/bpr_baseline.pt`
+- `checkpoints/target_models/ml1m/neumf_baseline.pt`
+- `checkpoints/target_models/ml1m/lightgcn_baseline.pt`
+- `checkpoints/target_models/ml1m/sasrec_baseline.pt`
+- `checkpoints/target_models/ml1m/manifest.json`
