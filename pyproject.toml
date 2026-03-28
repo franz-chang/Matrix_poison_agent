@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matrix-poison-repro"
+version = "0.1.0"
+description = "Reproduction of the Matrix-Poison self-evolving category-level poisoning framework."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.25",
+  "pandas>=2.0",
+  "torch>=2.2",
+  "tqdm>=4.66",
+]
+
+[tool.setuptools.packages.find]
+include = ["matrix_poison*"]
