@@ -2,3 +2,4 @@ numpy>=1.25
 pandas>=2.0
 torch>=2.2
 tqdm>=4.66
+camel-ai>=0.2.90

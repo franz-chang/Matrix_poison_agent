@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 
 from .attacks import ATTACK_METHODS, AttackRequest, mixed_attack
+from .camel_orchestrator import CamelMatrixPoisonCoordinator, CamelRuntimeConfig
 from .data import PreparedData, append_malicious_rows, build_user_item_sets, build_user_sequences
 from .metrics import hit_ndcg_at_k, objective_from_intent, prediction_shift, stealth_metrics
 from .models import TrainConfig, train_model
@@ -51,6 +52,14 @@ class MatrixPoisonConfig:
     push_shift_on_unseen_only: bool = True
     push_target_shift: float = 0.8
     push_epsilon_max: float = 0.5
+    enable_analysis_phase: bool = True
+    enable_planning_phase: bool = True
+    enable_judgment_phase: bool = True
+    enable_self_evolving: bool = True
+    fixed_attack_weights: Optional[Dict[str, float]] = None
+    camel_enabled: bool = True
+    camel_model: str = "openai:gpt-4o-mini"
+    camel_use_stub_when_no_api_key: bool = True
     seed: int = 42
     device: str = "auto"
 
@@ -121,6 +130,13 @@ class MatrixPoisonAgent:
         self.stagnation_steps = 0
         self.analysis_ranking: List[str] = []
         self.iter_history: List[IterationResult] = []
+        self.camel = CamelMatrixPoisonCoordinator(
+            CamelRuntimeConfig(
+                enabled=self.cfg.camel_enabled,
+                model=self.cfg.camel_model,
+                use_stub_when_no_api_key=self.cfg.camel_use_stub_when_no_api_key,
+            )
+        )
 
     @staticmethod
     def _resolve_device(device: str) -> str:
@@ -130,6 +146,14 @@ class MatrixPoisonAgent:
 
     def _is_push(self) -> bool:
         return self.cfg.intent.lower() == "push"
+
+    @staticmethod
+    def _normalize_attack_weights(weights: Dict[str, float]) -> Dict[str, float]:
+        merged = {k: float(max(0.0, weights.get(k, 0.0))) for k in ATTACK_METHODS}
+        s = sum(merged.values())
+        if s <= 0:
+            return {"random": 1.0, "average": 0.0, "bandwagon": 0.0, "segmented": 0.0}
+        return {k: float(v / s) for k, v in merged.items()}
 
     def _attack_profile_max_len(self) -> int:
         if self._is_push():
@@ -282,7 +306,13 @@ class MatrixPoisonAgent:
         hit_delta = float(quality["hit"] - clean_hit)
         ndcg_delta = float(quality["ndcg"] - clean_ndcg)
         stealth = stealth_metrics(self.data.train, train_poisoned)
-        clean_drop = 0.0
+        clean_drop = float(
+            max(
+                0.0,
+                clean_hit - float(quality["hit"]),
+                clean_ndcg - float(quality["ndcg"]),
+            )
+        )
         stealth_penalty = stealth["rating_kl"] + stealth["profile_shift"]
         shift_term = objective_from_intent(self.cfg.intent, pred_shift)
         if self._is_push():
@@ -305,12 +335,26 @@ class MatrixPoisonAgent:
             "reward": float(reward),
             "hit": float(quality["hit"]),
             "ndcg": float(quality["ndcg"]),
+            "hit_delta": float(hit_delta),
+            "ndcg_delta": float(ndcg_delta),
             "clean_drop": float(clean_drop),
             "stealth_penalty": float(stealth_penalty),
+            "rating_kl": float(stealth["rating_kl"]),
+            "profile_shift": float(stealth["profile_shift"]),
+            "interaction_ratio": float(stealth["interaction_ratio"]),
             "category_sensitivity": float(sensitivity),
         }
 
     def analysis_phase(self, clean_model, clean_hit: float, clean_ndcg: float) -> List[str]:
+        if not self.cfg.enable_analysis_phase:
+            if self._is_push():
+                prior = self._push_weight_prior()
+                rank = [k for k, _ in sorted(prior.items(), key=lambda kv: kv[1], reverse=True)]
+            else:
+                rank = list(ATTACK_METHODS.keys())
+            self.analysis_ranking = rank
+            return rank
+
         probe_eps = max(self.cfg.epsilon_min, self.current_epsilon * self.cfg.analysis_probe_ratio)
         scores: Dict[str, float] = {}
         for idx, method in enumerate(ATTACK_METHODS.keys()):
@@ -341,11 +385,23 @@ class MatrixPoisonAgent:
             )
             # Analysis phase follows Eq. (6): category sensitivity from probe attack.
             scores[method] = float(metrics["category_sensitivity"])
-        rank = [k for k, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)]
+        rank = self.camel.analysis_rank(
+            method_sensitivity=scores,
+            intent=self.cfg.intent,
+            target_category=self.target_category,
+        )
+        if not rank:
+            rank = [k for k, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)]
         self.analysis_ranking = rank
         return rank
 
     def planning_phase(self, iteration: int) -> Dict[str, float]:
+        if self.cfg.fixed_attack_weights:
+            return self._normalize_attack_weights(self.cfg.fixed_attack_weights)
+
+        if not self.cfg.enable_planning_phase:
+            return {"random": 1.0, "average": 0.0, "bandwagon": 0.0, "segmented": 0.0}
+
         if not self.analysis_ranking:
             self.analysis_ranking = list(ATTACK_METHODS.keys())
         rank = self.analysis_ranking
@@ -383,9 +439,38 @@ class MatrixPoisonAgent:
             if self._is_push():
                 return self._push_weight_prior()
             return {"random": 1.0, "average": 0.0, "bandwagon": 0.0, "segmented": 0.0}
-        return {k: float(max(v, 0.0) / s) for k, v in plan.items()}
+        plan = {k: float(max(v, 0.0) / s) for k, v in plan.items()}
+
+        camel_plan = self.camel.planning_weights(
+            base_plan=plan,
+            current_weights=self.current_weights,
+            iteration=iteration,
+            stagnation_steps=self.stagnation_steps,
+            intent=self.cfg.intent,
+        )
+        if camel_plan:
+            return self._normalize_attack_weights(camel_plan)
+        return plan
 
     def self_evolve(self, objective: float, stealth_penalty: float, prediction_shift_value: float) -> None:
+        if not self.cfg.enable_self_evolving:
+            return
+
+        epsilon_max = self._push_epsilon_cap() if self._is_push() else self.cfg.epsilon_max
+        camel_next = self.camel.evolve_epsilon(
+            current_epsilon=self.current_epsilon,
+            objective=objective,
+            stealth_penalty=stealth_penalty,
+            prediction_shift_value=prediction_shift_value,
+            epsilon_min=self.cfg.epsilon_min,
+            epsilon_max=epsilon_max,
+            is_push=self._is_push(),
+            push_target_shift=self._push_target_shift(),
+        )
+        if camel_next is not None:
+            self.current_epsilon = camel_next
+            return
+
         # Semantic-gradient inspired update on poisoning ratio epsilon.
         if self._is_push():
             if stealth_penalty > 0.2:
@@ -483,12 +568,28 @@ class MatrixPoisonAgent:
             )
             self.iter_history.append(iter_res)
 
-            stealth_sorted.append((metrics["stealth_penalty"], weights))
-            stealth_sorted = sorted(stealth_sorted, key=lambda x: x[0])[:3]
-            self.best_stealth_weights = stealth_sorted[0][1]
-            effective_sorted.append((metrics["objective"], weights))
-            effective_sorted = sorted(effective_sorted, key=lambda x: x[0], reverse=True)[:3]
-            self.best_effective_weights = effective_sorted[0][1]
+            if self.cfg.enable_judgment_phase:
+                judge = self.camel.judge_adjustment(
+                    metrics=metrics,
+                    is_push=self._is_push(),
+                    clean_drop_tolerance=self.cfg.clean_drop_tolerance,
+                    push_min_shift=self.cfg.push_min_shift,
+                )
+                if judge:
+                    pass_judge = bool(judge.get("pass_judge", pass_judge))
+                    metrics["reward"] = float(metrics["reward"] + float(judge.get("reward_adjust", 0.0)))
+                    iter_res.pass_judge = pass_judge
+                    iter_res.reward = float(metrics["reward"])
+
+                stealth_sorted.append((metrics["stealth_penalty"], weights))
+                stealth_sorted = sorted(stealth_sorted, key=lambda x: x[0])[:3]
+                self.best_stealth_weights = stealth_sorted[0][1]
+                effective_sorted.append((metrics["objective"], weights))
+                effective_sorted = sorted(effective_sorted, key=lambda x: x[0], reverse=True)[:3]
+                self.best_effective_weights = effective_sorted[0][1]
+            else:
+                pass_judge = True
+                iter_res.pass_judge = True
 
             candidate_valid = (not self._is_push()) or (metrics["prediction_shift"] > self.cfg.push_min_shift)
             if candidate_valid:

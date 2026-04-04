@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from matrix_poison.agent import MatrixPoisonAgent, MatrixPoisonConfig
+from matrix_poison.attacks import ATTACK_METHODS
 from matrix_poison.data import PreparedData, prepare_data
 
 
@@ -70,6 +71,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--push-target-shift", type=float, default=0.8, help="Target prediction shift used for push epsilon evolution")
     p.add_argument("--push-epsilon-max", type=float, default=0.5, help="Max epsilon cap for push mode")
     p.add_argument("--disable-push-shift-unseen-only", action="store_true", help="If set, push shift uses all eval users instead of unseen users")
+    p.add_argument("--disable-analysis-phase", action="store_true", help="Disable analysis phase (ablation: w/o analysis)")
+    p.add_argument("--disable-planning-phase", action="store_true", help="Disable planning phase (ablation: w/o planning)")
+    p.add_argument("--disable-judgment-phase", action="store_true", help="Disable judgment phase (ablation: w/o judgment)")
+    p.add_argument("--disable-self-evolving", action="store_true", help="Disable self-evolving phase (ablation: w/o self-evolving)")
+    p.add_argument(
+        "--fixed-attack-method",
+        choices=sorted(ATTACK_METHODS.keys()),
+        default=None,
+        help="Force a single attack method throughout all iterations (for baseline comparison).",
+    )
+    p.add_argument("--disable-camel", action="store_true", help="Disable CAMEL orchestrator.")
+    p.add_argument("--camel-model", default="openai:gpt-4o-mini", help="CAMEL model spec, e.g. openai:gpt-4o-mini")
+    p.add_argument("--camel-no-stub-fallback", action="store_true", help="Disable CAMEL STUB fallback when API key is absent")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="auto", help="auto/cpu/cuda")
     p.add_argument("--output-dir", default="outputs")
@@ -119,6 +133,14 @@ def main() -> None:
         push_shift_on_unseen_only=not args.disable_push_shift_unseen_only,
         push_target_shift=args.push_target_shift,
         push_epsilon_max=args.push_epsilon_max,
+        enable_analysis_phase=not args.disable_analysis_phase,
+        enable_planning_phase=not args.disable_planning_phase,
+        enable_judgment_phase=not args.disable_judgment_phase,
+        enable_self_evolving=not args.disable_self_evolving,
+        fixed_attack_weights={args.fixed_attack_method: 1.0} if args.fixed_attack_method else None,
+        camel_enabled=not args.disable_camel,
+        camel_model=args.camel_model,
+        camel_use_stub_when_no_api_key=not args.camel_no_stub_fallback,
         seed=args.seed,
         device=args.device,
     )

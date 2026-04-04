@@ -82,6 +82,26 @@ python scripts/run_matrix_poison.py \
   如果需要接入真实 LLM API，可在 `matrix_poison/agent.py` 的 `analysis_phase` 和 `self_evolve` 扩展提示优化逻辑。
 - 默认遵循论文的灰盒设定：只基于可见交互数据训练本地 shadow/victim，不访问目标系统梯度与参数。
 
+## CAMEL-AI 多 Agent 改写
+
+当前实现已接入 CAMEL-AI 作为分析 / 规划 / 判断 / 自进化四阶段编排层：
+
+- `matrix_poison/camel_orchestrator.py`：CAMEL 角色编排与 JSON 决策接口
+- `matrix_poison/agent.py`：在每轮迭代调用 CAMEL 决策（带鲁棒 fallback）
+
+默认行为：
+
+- 若环境中有 `OPENAI_API_KEY`，将使用 `--camel-model` 指定模型（默认 `openai:gpt-4o-mini`）
+- 若未设置 API Key，默认使用 CAMEL `STUB` 后端并自动回退规则策略，保证实验可跑通
+
+可用参数（`scripts/run_matrix_poison.py`）：
+
+- `--disable-camel`
+- `--camel-model openai:gpt-4o-mini`
+- `--camel-no-stub-fallback`
+- `--disable-analysis-phase / --disable-planning-phase / --disable-judgment-phase / --disable-self-evolving`
+- `--fixed-attack-method random|average|bandwagon|segmented`
+
 
 ## Train Baseline Target Models
 
@@ -101,3 +121,26 @@ This produces:
 - `checkpoints/target_models/ml1m/lightgcn_baseline.pt`
 - `checkpoints/target_models/ml1m/sasrec_baseline.pt`
 - `checkpoints/target_models/ml1m/manifest.json`
+
+## 按论文顺序一键实验
+
+新增脚本 `scripts/run_paper_order_experiments.py`，按论文章节顺序执行：
+
+1. `5.3.1` 单市场攻击有效性（RQ1）
+2. `5.3.2` 与基线方法对比（RQ1 扩展）
+3. `5.4` 跨市场攻击有效性（RQ2）
+4. `5.5` 隐蔽性评估（RQ3）
+5. `5.6` 消融实验（并生成 RQ4 脆弱性汇总）
+
+示例（快速版）：
+
+```bash
+python scripts/run_paper_order_experiments.py --quick
+```
+
+输出包含：
+
+- `paper_order_report.md`
+- `paper_order_all_results.csv`
+- `5_5_stealthiness.csv`
+- `rq4_vulnerability_summary.csv`

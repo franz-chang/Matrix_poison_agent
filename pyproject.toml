@@ -13,6 +13,7 @@ dependencies = [
   "pandas>=2.0",
   "torch>=2.2",
   "tqdm>=4.66",
+  "camel-ai>=0.2.90",
 ]
 
 [tool.setuptools.packages.find]
