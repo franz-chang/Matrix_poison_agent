@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-epochs", type=int, default=32)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--gpu", type=int, default=0)
+    p.add_argument("--intent", choices=["nuke", "push"], default="nuke")
     p.add_argument("--output-csv", required=True)
     return p.parse_args()
 
@@ -50,6 +51,7 @@ def _build_pcattack_lite(
     num_fake_user: int,
     num_filler_item: int,
     num_filler_pop: int,
+    intent: str,
 ) -> pd.DataFrame:
     rng = np.random.default_rng(1234)
 
@@ -81,7 +83,9 @@ def _build_pcattack_lite(
     rows = []
     for fake_idx in range(int(num_fake_user)):
         fake_user = n_users + fake_idx
-        chosen = {int(target_item)}
+        chosen = set()
+        if intent == "push":
+            chosen.add(int(target_item))
 
         if len(pop_pool) > 0 and num_filler_pop > 0:
             sampled_pop = _weighted_sample_without_replacement(
@@ -101,9 +105,12 @@ def _build_pcattack_lite(
 
         all_items = list(chosen)
         for item in all_items:
-            if int(item) == int(target_item):
-                rating = float(np.clip(rng.normal(1.1, 0.1), 1.0, 1.5))
+            if intent == "push" and int(item) == int(target_item):
+                rating = float(np.clip(rng.normal(4.95, 0.08), 4.6, 5.0))
+            elif intent == "push":
+                rating = float(np.clip(rng.normal(4.2, 0.2), 3.8, 5.0))
             else:
+                # Nuke mode for implicit-feedback victims: avoid interacting with target item.
                 rating = float(np.clip(rng.normal(4.6, 0.2), 4.0, 5.0))
             rows.append(
                 {
@@ -135,6 +142,7 @@ def main() -> None:
         num_fake_user=int(args.num_fake_user),
         num_filler_item=int(args.num_filler_item),
         num_filler_pop=int(args.num_filler_pop),
+        intent=str(args.intent).lower(),
     )
 
     out_path = Path(args.output_csv).expanduser().resolve()
@@ -147,6 +155,7 @@ def main() -> None:
                 "mode": "pcattack_lite",
                 "dataset": args.dataset_alias,
                 "target_item": int(args.target_item),
+                "intent": str(args.intent).lower(),
                 "num_fake_users": int(args.num_fake_user),
                 "rows": int(len(out_df)),
                 "output_csv": str(out_path),

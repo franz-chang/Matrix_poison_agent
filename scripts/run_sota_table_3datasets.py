@@ -405,7 +405,7 @@ def _build_layout_table(results: Dict[Tuple[str, str, str], Dict[str, float]], d
                 if method == "baseline":
                     row[f"{ds_label} P. Shift"] = "-"
                 else:
-                    row[f"{ds_label} P. Shift"] = f"{abs(_safe_float(m.get('prediction_shift', 0.0))):.{decimals}f}"
+                    row[f"{ds_label} P. Shift"] = f"{_safe_float(m.get('prediction_shift', 0.0)):.{decimals}f}"
             rows.append(row)
     return pd.DataFrame(rows)
 

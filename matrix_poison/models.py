@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import random
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -11,10 +12,17 @@ import torch.nn.functional as F
 
 
 def _seed_everything(seed: int) -> None:
+    random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    # Keep training/evaluation reproducible across repeated runs.
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    if hasattr(torch, "use_deterministic_algorithms"):
+        torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def _extract_pos_pairs(train_df: pd.DataFrame, pos_thr: float = 4.0) -> np.ndarray:
@@ -240,6 +248,7 @@ class NeuMF(RecommenderBase):
         _seed_everything(seed)
         self.device = device
         self.model = NeuMFNet(num_users, num_items, embedding_dim=self.embedding_dim).to(device)
+        self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
 
         train_pairs = _extract_pos_pairs(train_df, pos_thr=positive_threshold)
@@ -287,6 +296,7 @@ class NeuMF(RecommenderBase):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+        self.model.eval()
         return self
 
     def score(
@@ -296,6 +306,7 @@ class NeuMF(RecommenderBase):
         user_sequences: Optional[Dict[int, List[int]]] = None,
     ) -> np.ndarray:
         assert self.model is not None and self.device is not None
+        self.model.eval()
         with torch.no_grad():
             u_t = torch.tensor(users, dtype=torch.long, device=self.device)
             i_t = torch.tensor(items, dtype=torch.long, device=self.device)
@@ -369,6 +380,7 @@ class LightGCN(RecommenderBase):
         self.num_users = num_users
         self.num_items = num_items
         self.model = LightGCNNet(num_users, num_items, embedding_dim=self.embedding_dim, n_layers=self.n_layers).to(device)
+        self.model.train()
 
         pairs = _extract_pos_pairs(train_df, pos_thr=positive_threshold)
         if len(pairs) == 0:
@@ -415,6 +427,7 @@ class LightGCN(RecommenderBase):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+        self.model.eval()
         return self
 
     def score(
@@ -533,6 +546,7 @@ class SASRec(RecommenderBase):
             num_layers=self.num_layers,
             num_heads=self.num_heads,
         ).to(device)
+        self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
 
         train_pos_df = (
@@ -595,6 +609,7 @@ class SASRec(RecommenderBase):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+        self.model.eval()
         return self
 
     def score(
@@ -604,6 +619,7 @@ class SASRec(RecommenderBase):
         user_sequences: Optional[Dict[int, List[int]]] = None,
     ) -> np.ndarray:
         assert self.model is not None and self.device is not None
+        self.model.eval()
         seq_store = user_sequences if user_sequences is not None else self.train_sequences
         seqs = []
         for u in users:

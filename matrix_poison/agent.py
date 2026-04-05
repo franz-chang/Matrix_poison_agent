@@ -328,8 +328,11 @@ class MatrixPoisonAgent:
                 obj -= self.cfg.push_negative_penalty * (self.cfg.push_min_shift - pred_shift + 1.0)
         else:
             rank_term = (-hit_delta) + (-ndcg_delta)
-            # For nuke, prioritize rank collapse of target set over single-item shift.
-            obj = 0.02 * shift_term + 4.0 * rank_term
+            # For nuke, jointly optimize target-score suppression and rank collapse.
+            obj = self.cfg.shift_weight * shift_term + self.cfg.rank_weight * rank_term
+            if pred_shift >= 0.0:
+                # Guard against reverse direction: nuke should lower target score.
+                obj -= (pred_shift + 1.0)
         reward = obj - self.cfg.stealth_lambda * stealth_penalty
         sensitivity = self._category_sensitivity(clean_model, poison_model, clean_seq, poison_seq)
 
@@ -600,7 +603,11 @@ class MatrixPoisonAgent:
                 pass_judge = True
                 iter_res.pass_judge = True
 
-            candidate_valid = (not self._is_push()) or (metrics["prediction_shift"] > self.cfg.push_min_shift)
+            if self._is_push():
+                candidate_valid = metrics["prediction_shift"] > self.cfg.push_min_shift
+            else:
+                # Nuke candidates should preferably produce negative target shift.
+                candidate_valid = metrics["prediction_shift"] < 0.0
             if candidate_valid:
                 should_update_best = (not has_valid_best) or (metrics["reward"] > best_reward)
             else:

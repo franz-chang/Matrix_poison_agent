@@ -232,8 +232,6 @@ def random_attack(
                 chosen.update(rng.choice(category_non_target, size=min(6, len(category_non_target)), replace=False).astype(int).tolist())
             chosen.update(rng.choice(decoy_pool, size=min(10, len(decoy_pool)), replace=False).astype(int).tolist())
             chosen.update(rng.choice(non_target, size=min(4, len(non_target)), replace=False).astype(int).tolist())
-            if req.target_items:
-                chosen.update([int(x) for x in req.target_items])
         items_per_user.append(list(chosen))
     if req.intent == "push":
         rows = _rows_for_push_users(
@@ -325,8 +323,6 @@ def average_attack(
             chosen.update(rng.choice(category_non_target, size=min(6, len(category_non_target)), replace=False).astype(int).tolist())
         chosen.update(rng.choice(decoy_pool, size=min(12, len(decoy_pool)), replace=False).astype(int).tolist())
         chosen.update(rng.choice(non_target, size=min(4, len(non_target)), replace=False).astype(int).tolist())
-        if req.target_items:
-            chosen.update([int(x) for x in req.target_items])
         for i in chosen:
             if int(i) in target_set:
                 base = 1.2
@@ -388,8 +384,6 @@ def bandwagon_attack(
                     rng.choice(category_non_target, size=min(6, len(category_non_target)), replace=False).astype(int).tolist()
                 )
             chosen.update(rng.choice(decoy_pool, size=min(14, len(decoy_pool)), replace=False).astype(int).tolist())
-            if req.target_items:
-                chosen.update([int(x) for x in req.target_items])
         fill_pool = push_filler if req.intent == "push" else base_pool
         while len(chosen) < min(profile_len, len(fill_pool)):
             chosen.add(int(fill_pool[int(rng.integers(0, len(fill_pool)))]))
@@ -465,11 +459,15 @@ def segmented_attack(
 
     rows: List[dict] = []
     target_set = set(int(x) for x in req.target_items)
+    # In nuke mode under implicit feedback, interacting with target can backfire.
+    category_pool_nuke = [i for i in category_pool if i not in target_set]
+    if not category_pool_nuke:
+        category_pool_nuke = list(category_pool)
     for idx, u in enumerate(users):
         focused = (idx % 2 == 0)
         chosen = set()
         if focused:
-            chosen.update(rng.choice(category_pool, size=min(max(4, profile_len // 2), len(category_pool)), replace=False).astype(int).tolist())
+            chosen.update(rng.choice(category_pool_nuke, size=min(max(4, profile_len // 2), len(category_pool_nuke)), replace=False).astype(int).tolist())
         else:
             chosen.update(rng.choice(non_target_pool, size=min(max(4, profile_len // 2), len(non_target_pool)), replace=False).astype(int).tolist())
 
@@ -477,10 +475,8 @@ def segmented_attack(
             chosen.update(rng.choice(category_non_target, size=min(6, len(category_non_target)), replace=False).astype(int).tolist())
         chosen.update(rng.choice(decoy_pool, size=min(12, len(decoy_pool)), replace=False).astype(int).tolist())
         chosen.update(rng.choice(non_target_pool, size=min(4, len(non_target_pool)), replace=False).astype(int).tolist())
-        if req.target_items:
-            chosen.update([int(x) for x in req.target_items])
 
-        base_pool = category_pool if focused else non_target_pool
+        base_pool = category_pool_nuke if focused else non_target_pool
         while len(chosen) < min(profile_len, len(base_pool)):
             chosen.add(int(base_pool[int(rng.integers(0, len(base_pool)))]))
 
