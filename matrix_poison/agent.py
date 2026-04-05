@@ -493,12 +493,16 @@ class MatrixPoisonAgent:
             self.current_epsilon = float(np.clip(self.current_epsilon, self.cfg.epsilon_min, self._push_epsilon_cap()))
             return
 
-        if stealth_penalty > 0.2:
-            self.current_epsilon *= 0.85
-        elif objective <= 0:
+        if prediction_shift_value > -0.1:
+            self.current_epsilon *= 1.55
+        elif prediction_shift_value > -0.3:
             self.current_epsilon *= 1.35
+        elif objective <= 0:
+            self.current_epsilon *= 1.20
+        elif stealth_penalty > 0.35:
+            self.current_epsilon *= 0.92
         else:
-            self.current_epsilon *= 1.03
+            self.current_epsilon *= 1.05
         self.current_epsilon = float(np.clip(self.current_epsilon, self.cfg.epsilon_min, self.cfg.epsilon_max))
 
     def run(self) -> AgentResult:
@@ -609,7 +613,14 @@ class MatrixPoisonAgent:
                 # Nuke candidates should preferably produce negative target shift.
                 candidate_valid = metrics["prediction_shift"] < 0.0
             if candidate_valid:
-                should_update_best = (not has_valid_best) or (metrics["reward"] > best_reward)
+                if not has_valid_best:
+                    should_update_best = True
+                elif self._is_push():
+                    should_update_best = metrics["reward"] > best_reward
+                else:
+                    prev_shift = float(best_metrics.get("prediction_shift", 1e18)) if best_metrics else 1e18
+                    cur_shift = float(metrics.get("prediction_shift", 1e18))
+                    should_update_best = (cur_shift < prev_shift - 1e-8) or (abs(cur_shift - prev_shift) <= 1e-8 and metrics["reward"] > best_reward)
             else:
                 should_update_best = (not has_valid_best) and (metrics["reward"] > best_reward)
             if should_update_best:
