@@ -38,7 +38,7 @@ class MatrixPoisonConfig:
     stealth_lambda: float = 0.25
     shift_weight: float = 0.2
     rank_weight: float = 1.0
-    target_eval_size: int = 5
+    target_eval_size: int = 1
     clean_drop_tolerance: float = 0.06
     profile_max_len: int = 120
     push_profile_max_len: int = 24
@@ -113,8 +113,12 @@ class MatrixPoisonAgent:
         cat_items = [int(i) for i in self.data.category_to_items[self.target_category]]
         item_pop = self.data.train["item"].value_counts().to_dict()
         cat_items_sorted = sorted(cat_items, key=lambda i: item_pop.get(int(i), 0), reverse=True)
-        if self.cfg.target_eval_size > 0:
+        if self._is_push():
+            # Push attacks optimize one designated target item (standard shilling setup).
+            self.target_items = {self.target_item}
+        elif self.cfg.target_eval_size > 0:
             self.target_items = set(cat_items_sorted[: self.cfg.target_eval_size])
+            self.target_items.add(self.target_item)
         else:
             self.target_items = set(cat_items_sorted)
 
@@ -160,9 +164,9 @@ class MatrixPoisonAgent:
             base = int(self.cfg.push_profile_max_len)
             model = self.cfg.model_name.lower()
             if model == "sasrec":
-                return int(min(base, 4))
+                return int(max(8, min(base, 12)))
             if model == "bpr":
-                return int(min(base, 8))
+                return int(max(10, min(base, 16)))
             return base
         return int(self.cfg.profile_max_len)
 
@@ -550,9 +554,14 @@ class MatrixPoisonAgent:
                 epochs=self.cfg.judge_epochs,
             )
 
-            pass_judge = metrics["clean_drop"] <= self.cfg.clean_drop_tolerance and metrics["objective"] > 0
+            pass_judge = metrics["objective"] > 0
             if self._is_push():
-                pass_judge = pass_judge and metrics["prediction_shift"] > self.cfg.push_min_shift
+                # Push should preserve clean utility and increase the target score.
+                pass_judge = (
+                    pass_judge
+                    and metrics["clean_drop"] <= self.cfg.clean_drop_tolerance
+                    and metrics["prediction_shift"] > self.cfg.push_min_shift
+                )
             iter_res = IterationResult(
                 iteration=it,
                 epsilon=self.current_epsilon,

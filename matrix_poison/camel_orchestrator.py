@@ -202,9 +202,13 @@ class CamelMatrixPoisonCoordinator:
         clean_drop_tolerance: float,
         push_min_shift: float,
     ) -> Optional[Dict[str, Any]]:
-        default_pass = metrics.get("objective", 0.0) > 0 and metrics.get("clean_drop", 0.0) <= clean_drop_tolerance
+        default_pass = metrics.get("objective", 0.0) > 0
         if is_push:
-            default_pass = default_pass and (metrics.get("prediction_shift", 0.0) > push_min_shift)
+            default_pass = (
+                default_pass
+                and metrics.get("clean_drop", 0.0) <= clean_drop_tolerance
+                and metrics.get("prediction_shift", 0.0) > push_min_shift
+            )
         if not self.active:
             return {"pass_judge": bool(default_pass), "reward_adjust": 0.0, "reason": "rule_fallback"}
 

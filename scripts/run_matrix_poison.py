@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,16 +17,51 @@ from matrix_poison.attacks import ATTACK_METHODS
 from matrix_poison.data import PreparedData, prepare_data
 
 
-def _pick_target_item(data: PreparedData, target_category: str) -> int:
+def _pick_target_item(
+    data: PreparedData,
+    target_category: str,
+    intent: str,
+    policy: str = "auto",
+) -> int:
     items = data.category_to_items[target_category]
     pop = data.train["item"].value_counts().to_dict()
     items_sorted = sorted(items, key=lambda i: pop.get(int(i), 0), reverse=True)
+    if not items_sorted:
+        raise ValueError(f"No items found for category `{target_category}`.")
+
+    policy = policy.lower()
+    if policy == "head":
+        return int(items_sorted[0])
+    if policy == "tail":
+        return int(items_sorted[-1])
+    if policy == "median":
+        return int(items_sorted[len(items_sorted) // 2])
+    if policy != "auto":
+        raise ValueError(f"Unknown target-item policy `{policy}`.")
+
+    if intent.lower() == "push":
+        # Literature-consistent setup: push attacks are more effective on medium/long-tail items.
+        idx = int(round((len(items_sorted) - 1) * 0.7))
+        idx = int(np.clip(idx, 0, len(items_sorted) - 1))
+        return int(items_sorted[idx])
+    # Nuke attacks usually target high-exposure head items.
     return int(items_sorted[0])
 
 
-def _resolve_target_item(data: PreparedData, raw_target_item: str | None, target_category: str) -> int:
+def _resolve_target_item(
+    data: PreparedData,
+    raw_target_item: str | None,
+    target_category: str,
+    intent: str,
+    target_item_policy: str,
+) -> int:
     if not raw_target_item:
-        return _pick_target_item(data, target_category)
+        return _pick_target_item(
+            data=data,
+            target_category=target_category,
+            intent=intent,
+            policy=target_item_policy,
+        )
     if raw_target_item in data.item_id_to_index:
         idx = data.item_id_to_index[raw_target_item]
     else:
@@ -44,6 +80,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--items", required=True, help="Path to items.csv")
     p.add_argument("--target-category", required=True, help="Target category label in items.csv")
     p.add_argument("--target-item", default=None, help="Target item raw id (preferred) or encoded item index")
+    p.add_argument(
+        "--target-item-policy",
+        choices=["auto", "head", "tail", "median"],
+        default="auto",
+        help="Policy to auto-pick target item when --target-item is not provided",
+    )
     p.add_argument("--intent", choices=["push", "nuke"], default="nuke")
     p.add_argument("--model", choices=["bpr", "neumf", "lightgcn", "sasrec"], default="bpr")
     p.add_argument("--min-positive-rating", type=float, default=1.0)
@@ -59,7 +101,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-6)
     p.add_argument("--k", type=int, default=10)
-    p.add_argument("--target-eval-size", type=int, default=5, help="Top-N popular items in target category used for Hit/NDCG")
+    p.add_argument(
+        "--target-eval-size",
+        type=int,
+        default=1,
+        help="Number of target-category items used for Hit/NDCG (default 1 for item-level push/nuke).",
+    )
     p.add_argument("--profile-max-len", type=int, default=120, help="Max fake profile length for nuke attack generation")
     p.add_argument("--push-profile-max-len", type=int, default=24, help="Max fake profile length for push attack generation")
     p.add_argument("--positive-rating-threshold", type=float, default=4.0, help="Rating threshold used as positive feedback in training")
@@ -104,7 +151,13 @@ def main() -> None:
     categories = sorted(data.category_to_items.keys())
     if args.target_category not in data.category_to_items:
         raise ValueError(f"Unknown target category `{args.target_category}`. Available: {categories[:30]}")
-    target_item = _resolve_target_item(data, args.target_item, args.target_category)
+    target_item = _resolve_target_item(
+        data=data,
+        raw_target_item=args.target_item,
+        target_category=args.target_category,
+        intent=args.intent,
+        target_item_policy=args.target_item_policy,
+    )
 
     cfg = MatrixPoisonConfig(
         intent=args.intent,
@@ -162,6 +215,7 @@ def main() -> None:
         "target_category": result.target_category,
         "target_item_index": result.target_item,
         "target_item_raw_id": data.index_to_item_id.get(result.target_item, "UNKNOWN"),
+        "target_item_policy": args.target_item_policy,
         "clean_metrics": result.clean_metrics,
         "best_iteration": result.best_iteration,
         "best_reward": result.best_reward,

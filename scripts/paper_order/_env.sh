@@ -3,7 +3,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+PYTHON_BIN="${PYTHON_BIN:-/root/miniconda3/bin/python}"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+  else
+    echo "[paper_order] ERROR: python interpreter not found" >&2
+    exit 1
+  fi
+fi
 
 STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 OUT_BASE="${OUT_BASE:-${ROOT_DIR}/outputs/paper_shell_${STAMP}}"
@@ -17,10 +27,16 @@ TARGET_CATEGORY="${TARGET_CATEGORY:-Action}"
 PUSH_TARGET_CATEGORY="${PUSH_TARGET_CATEGORY:-Thriller}"
 EPSILON_NUKE="${EPSILON_NUKE:-0.005}"
 EPSILON_PUSH="${EPSILON_PUSH:-0.02}"
+TARGET_ITEM_POLICY="${TARGET_ITEM_POLICY:-auto}"
+TARGET_EVAL_SIZE="${TARGET_EVAL_SIZE:-1}"
 
 SEED="${SEED:-42}"
 DEVICE="${DEVICE:-auto}"
-BATCH_SIZE="${BATCH_SIZE:-2048}"
+# RTX 4090 D friendly defaults:
+# - Most MF/GNN models: higher batch for throughput.
+# - SASRec: still larger than old default, but capped to reduce OOM risk.
+BATCH_SIZE="${BATCH_SIZE:-4096}"
+SASREC_BATCH_SIZE="${SASREC_BATCH_SIZE:-3072}"
 QUICK="${QUICK:-1}" # 1=quick, 0=paper-scale
 
 CAMEL_ENABLED="${CAMEL_ENABLED:-1}"
@@ -54,7 +70,8 @@ function init_common_args() {
     --clean-epochs "${CLEAN_EPOCHS}"
     --probe-epochs "${PROBE_EPOCHS}"
     --judge-epochs "${JUDGE_EPOCHS}"
-    --batch-size "${BATCH_SIZE}"
+    --target-item-policy "${TARGET_ITEM_POLICY}"
+    --target-eval-size "${TARGET_EVAL_SIZE}"
     --seed "${SEED}"
     --device "${DEVICE}"
     --camel-model "${CAMEL_MODEL}"
@@ -77,15 +94,20 @@ function run_case() {
   local out_dir="$7"
   shift 7
   local extra=("$@")
+  local local_batch="${BATCH_SIZE}"
+  if [[ "${model}" == "sasrec" ]]; then
+    local_batch="${SASREC_BATCH_SIZE}"
+  fi
 
   mkdir -p "${out_dir}"
-  echo "[paper_order] running model=${model} intent=${intent} category=${category} out=${out_dir}"
+  echo "[paper_order] running model=${model} intent=${intent} batch=${local_batch} category=${category} out=${out_dir}"
   if [[ ${#extra[@]} -gt 0 ]]; then
     "${PYTHON_BIN}" "${ROOT_DIR}/scripts/run_matrix_poison.py" \
       --interactions "${interactions}" \
       --items "${items}" \
       --model "${model}" \
       --intent "${intent}" \
+      --batch-size "${local_batch}" \
       --target-category "${category}" \
       --epsilon "${epsilon}" \
       --output-dir "${out_dir}" \
@@ -97,6 +119,7 @@ function run_case() {
       --items "${items}" \
       --model "${model}" \
       --intent "${intent}" \
+      --batch-size "${local_batch}" \
       --target-category "${category}" \
       --epsilon "${epsilon}" \
       --output-dir "${out_dir}" \

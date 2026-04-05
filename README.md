@@ -144,3 +144,23 @@ python scripts/run_paper_order_experiments.py --quick
 - `paper_order_all_results.csv`
 - `5_5_stealthiness.csv`
 - `rq4_vulnerability_summary.csv`
+
+## 已补充数据集（LastFM + Automotive）
+
+当前项目已补充以下可直接运行的数据：
+
+- `data/lastfm/interactions.csv`
+- `data/lastfm/items.csv`
+- `data/automotive/interactions.csv`
+- `data/automotive/items.csv`
+
+可复用构建脚本：
+
+```bash
+python scripts/build_matrix_poison_datasets.py
+```
+
+说明：
+
+- LastFM 使用 `hetrec2011-lastfm-2k`，并基于 `user_taggedartists` + `tags` 构造 item 类别。
+- Automotive 使用 Amazon Automotive 评分源（本地已保存为 `data/raw/automotive/raw.data`），类别统一为 `Automotive`。

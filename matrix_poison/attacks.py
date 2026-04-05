@@ -89,11 +89,11 @@ def _sample_without_replacement(
 
 
 def _push_profile_len(train_df: pd.DataFrame, max_profile_len: int) -> int:
-    upper = max(8, int(max_profile_len))
-    lower = min(12, upper)
-    cap = max(lower, min(24, upper))
+    upper = max(10, int(max_profile_len))
+    lower = min(14, upper)
+    cap = max(lower, min(40, upper))
     base = _profile_len(train_df, upper)
-    return int(np.clip(base, lower, cap))
+    return int(np.clip(base + 2, lower, cap))
 
 
 def _push_pools(
@@ -103,19 +103,32 @@ def _push_pools(
     target_category_items: List[int],
 ) -> Tuple[List[int], List[int]]:
     category_set = set(int(x) for x in target_category_items)
-    popular = _popular_items(train_df, top_n=min(max(200, num_items // 4), num_items))
+    popular = _popular_items(train_df, top_n=min(max(400, num_items // 3), num_items))
     if not popular:
         popular = list(range(num_items))
     item_avg = _item_avg_rating(train_df)
-    anchors = [i for i in popular if i in category_set and int(i) != int(target_item)][:3]
-    filler = [
-        i for i in popular
-        if i not in category_set and int(i) != int(target_item) and item_avg.get(int(i), 4.0) >= 3.6
-    ]
-    if len(filler) < 30:
-        filler = [i for i in popular if i not in category_set and int(i) != int(target_item)]
-    if len(filler) < 10:
-        filler = [i for i in range(num_items) if i not in category_set and i != int(target_item)]
+    non_target_outside = [i for i in popular if i not in category_set and int(i) != int(target_item)]
+    high_quality_outside = [i for i in non_target_outside if item_avg.get(int(i), 4.0) >= 3.8]
+
+    # Bandwagon anchors should come from popular outside-category items to avoid
+    # direct competition against non-target items in the target category.
+    anchors = high_quality_outside[:30]
+    if len(anchors) < 12:
+        anchors = non_target_outside[:40]
+
+    filler = list(dict.fromkeys(high_quality_outside + non_target_outside))
+    if len(filler) < 60:
+        filler_set = set(filler)
+        filler.extend(
+            i for i in range(num_items)
+            if i not in category_set and i != int(target_item) and i not in filler_set
+        )
+    filler = list(dict.fromkeys(filler))
+
+    if len(anchors) < 6:
+        same_category_backup = [i for i in popular if i in category_set and int(i) != int(target_item)][:4]
+        anchors = list(dict.fromkeys(anchors + same_category_backup))
+
     if not filler:
         filler = [i for i in range(num_items) if i != int(target_item)]
     return anchors, filler
@@ -139,7 +152,7 @@ def _rows_for_push_users(
             if int(i) == target_item:
                 rating = float(np.clip(rng.normal(4.95, 0.08), 4.6, 5.0))
             else:
-                rating = float(np.clip(rng.normal(base_rating, 0.2), 4.0, 5.0))
+                rating = float(np.clip(rng.normal(base_rating, 0.18), 3.8, 4.8))
             rows.append(
                 {
                     "user": int(u),
@@ -210,7 +223,7 @@ def random_attack(
         chosen = set(_sample_without_replacement(rng, base_pool, profile_len))
         if req.intent == "push":
             chosen.add(int(req.target_item))
-            chosen.update(_sample_without_replacement(rng, push_anchors, 1))
+            chosen.update(_sample_without_replacement(rng, push_anchors, 2))
             filler_need = max(0, profile_len - len(chosen))
             chosen.update(_sample_without_replacement(rng, push_filler, filler_need))
         else:
@@ -228,7 +241,7 @@ def random_attack(
             item_lists=items_per_user,
             target_item=req.target_item,
             rng=rng,
-            base_rating=4.6,
+            base_rating=4.2,
         )
     else:
         rows = _rows_for_users(
@@ -264,7 +277,6 @@ def average_attack(
         target_item=req.target_item,
         target_category_items=category_pool,
     )
-    all_items = np.arange(num_items, dtype=np.int64)
     if req.intent == "push":
         sample_items = np.array(push_filler, dtype=np.int64)
     else:
@@ -281,7 +293,7 @@ def average_attack(
         for _ in users:
             chosen = set()
             chosen.add(int(req.target_item))
-            chosen.update(_sample_without_replacement(rng, push_anchors, 1))
+            chosen.update(_sample_without_replacement(rng, push_anchors, 2))
             filler_need = max(0, profile_len - len(chosen))
             chosen.update(
                 _sample_without_replacement(
@@ -300,7 +312,7 @@ def average_attack(
                 item_lists=items_per_user,
                 target_item=req.target_item,
                 rng=rng,
-                base_rating=4.55,
+                base_rating=4.25,
             )
         )
 
@@ -366,7 +378,7 @@ def bandwagon_attack(
         chosen = set(rng.choice(base_pool, size=min(max(3, profile_len // 2), len(base_pool)), replace=False).astype(int).tolist())
         if req.intent == "push":
             chosen = {int(req.target_item)}
-            chosen.update(_sample_without_replacement(rng, push_anchors, 1))
+            chosen.update(_sample_without_replacement(rng, push_anchors, 2))
             chosen.update(_sample_without_replacement(rng, push_hot, max(3, profile_len // 2)))
             filler_need = max(0, profile_len - len(chosen))
             chosen.update(_sample_without_replacement(rng, push_filler, filler_need))
@@ -388,7 +400,7 @@ def bandwagon_attack(
             item_lists=items_per_user,
             target_item=req.target_item,
             rng=rng,
-            base_rating=4.75,
+            base_rating=4.35,
         )
     else:
         rows = _rows_for_users(
@@ -435,7 +447,7 @@ def segmented_attack(
             focused = (idx % 2 == 0)
             chosen = set()
             chosen.add(int(req.target_item))
-            anchor_k = 2 if focused else 1
+            anchor_k = 3 if focused else 2
             chosen.update(_sample_without_replacement(rng, push_anchors, anchor_k))
             base_push_pool = push_filler if not focused else list(dict.fromkeys(push_anchors + push_filler))
             filler_need = max(0, profile_len - len(chosen))
@@ -447,7 +459,7 @@ def segmented_attack(
                 item_lists=items_per_user,
                 target_item=req.target_item,
                 rng=rng,
-                base_rating=4.6,
+                base_rating=4.25,
             )
         )
 

@@ -81,6 +81,8 @@ def stealth_metrics(clean_train: pd.DataFrame, poisoned_train: pd.DataFrame) -> 
     clean_hist = np.clip(clean_hist, eps, None)
     poison_hist = np.clip(poison_hist, eps, None)
     rating_kl = float(np.sum(clean_hist * np.log(clean_hist / poison_hist)))
+    # KL is theoretically non-negative; clip minor numeric underflow.
+    rating_kl = float(max(0.0, rating_kl))
 
     clean_len = clean_train.groupby("user")["item"].count()
     poison_len = poisoned_train.groupby("user")["item"].count()
