@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="${ROOT_DIR}/scripts/paper_order"
 PYTHON_BIN="${PYTHON_BIN:-/root/miniconda3/bin/python}"
 if [[ ! -x "${PYTHON_BIN}" ]]; then

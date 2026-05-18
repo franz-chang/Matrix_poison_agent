@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 if ! command -v git >/dev/null 2>&1; then
@@ -25,7 +25,7 @@ MSG=""
 usage() {
   cat <<'USAGE'
 Usage:
-  ./commit.sh [options] [commit message]
+  ./shell/commit.sh [options] [commit message]
 
 Options:
   --no-push           Commit only, do not push.
@@ -38,10 +38,10 @@ Options:
   -h, --help          Show this help.
 
 Examples:
-  ./commit.sh
-  ./commit.sh "feat: update training pipeline"
-  ./commit.sh --sync "chore: sync + commit"
-  ./commit.sh --no-push "wip: local checkpoint"
+  ./shell/commit.sh
+  ./shell/commit.sh "feat: update training pipeline"
+  ./shell/commit.sh --sync "chore: sync + commit"
+  ./shell/commit.sh --no-push "wip: local checkpoint"
 USAGE
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 PYTHON_BIN="${PYTHON_BIN:-/root/miniconda3/bin/python}"
@@ -72,7 +72,7 @@ if [[ ! -f "${BASELINE_CSV}" ]]; then
   TARGET_EVAL_SIZE="${TARGET_EVAL_SIZE}" \
   XMARKET_ROOT="${XMARKET_ROOT}" \
   OUT_DIR="${BASELINE_OUT}" \
-  bash "${ROOT_DIR}/run_table4_baseline_seed42.sh"
+  bash "${ROOT_DIR}/shell/run_table4_baseline_seed42.sh"
 fi
 
 "${PYTHON_BIN}" scripts/run_table4_cross_market_matrix_poison.py \
