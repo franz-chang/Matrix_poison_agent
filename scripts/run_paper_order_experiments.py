@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--models", default="bpr,neumf,lightgcn,sasrec", help="Models for section 5.3.1")
     p.add_argument("--comparison-models", default="lightgcn", help="Models for section 5.3.2")
     p.add_argument("--cross-market-models", default="lightgcn", help="Models for section 5.4")
-    p.add_argument("--ablation-model", default="lightgcn", help="Model for section 5.6")
+    p.add_argument("--ablation-model", default="bpr", help="Model for section 5.6")
     p.add_argument("--comparison-intents", default="nuke", help="Intents for section 5.3.2, e.g. nuke,push")
     p.add_argument("--target-category", default="Action")
     p.add_argument("--push-target-category", default="Thriller")

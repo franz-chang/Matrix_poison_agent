@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import random
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -17,12 +18,27 @@ def _seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    # Keep training/evaluation reproducible across repeated runs.
-    if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    if hasattr(torch, "use_deterministic_algorithms"):
-        torch.use_deterministic_algorithms(True, warn_only=True)
+
+    # Optional fast CUDA path for heavy experiments.
+    # Enable with MATRIX_POISON_FAST_CUDA=1.
+    fast_cuda = os.getenv("MATRIX_POISON_FAST_CUDA", "0") == "1"
+    if fast_cuda:
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
+        if hasattr(torch, "use_deterministic_algorithms"):
+            torch.use_deterministic_algorithms(False)
+        if hasattr(torch, "set_float32_matmul_precision"):
+            torch.set_float32_matmul_precision("high")
+        if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+            torch.backends.cuda.matmul.allow_tf32 = True
+    else:
+        # Keep training/evaluation reproducible across repeated runs.
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        if hasattr(torch, "use_deterministic_algorithms"):
+            torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def _extract_pos_pairs(train_df: pd.DataFrame, pos_thr: float = 4.0) -> np.ndarray:
@@ -490,11 +506,19 @@ class SASRecNet(nn.Module):
 
 
 class SASRec(RecommenderBase):
-    def __init__(self, hidden_size: int = 64, max_len: int = 50, num_layers: int = 2, num_heads: int = 2):
+    def __init__(
+        self,
+        hidden_size: int = 64,
+        max_len: int = 50,
+        num_layers: int = 2,
+        num_heads: int = 2,
+        recent_steps: int = 5,
+    ):
         self.hidden_size = hidden_size
         self.max_len = max_len
         self.num_layers = num_layers
         self.num_heads = num_heads
+        self.recent_steps = recent_steps
         self.model: Optional[SASRecNet] = None
         self.num_items: int = 0
         self.device: Optional[torch.device] = None
@@ -506,9 +530,11 @@ class SASRec(RecommenderBase):
             seq = g.sort_values("timestamp")["item"].astype(int).tolist()
             if len(seq) < 2:
                 continue
-            # Use a handful of recent next-item transitions to avoid over-skewing
-            # training toward very long histories.
-            recent_steps = min(5, len(seq) - 1)
+            # recent_steps <= 0 means use all valid one-step transitions.
+            if int(self.recent_steps) <= 0:
+                recent_steps = len(seq) - 1
+            else:
+                recent_steps = min(int(self.recent_steps), len(seq) - 1)
             start = len(seq) - recent_steps
             for pos in range(start, len(seq)):
                 hist = seq[max(0, pos - self.max_len):pos]
@@ -621,14 +647,24 @@ class SASRec(RecommenderBase):
         assert self.model is not None and self.device is not None
         self.model.eval()
         seq_store = user_sequences if user_sequences is not None else self.train_sequences
-        seqs = []
-        for u in users:
-            seq = seq_store.get(int(u), [])
-            seqs.append(self._pad(seq))
+
+        users_arr = np.asarray(users, dtype=np.int64)
+        items_arr = np.asarray(items, dtype=np.int64)
+        if users_arr.size == 0:
+            return np.array([], dtype=np.float32)
+
+        # Deduplicate repeated users (common in all-item evaluation) and reuse
+        # final hidden states instead of re-running the Transformer per candidate item.
+        uniq_users, inv_idx = np.unique(users_arr, return_inverse=True)
+        uniq_seqs = np.array([self._pad(seq_store.get(int(u), [])) for u in uniq_users], dtype=np.int64)
+
         with torch.no_grad():
-            seq_t = torch.tensor(np.array(seqs, dtype=np.int64), dtype=torch.long, device=self.device)
-            h = self.model.final_hidden(seq_t)
-            i_t = torch.tensor(items, dtype=torch.long, device=self.device)
+            seq_t = torch.tensor(uniq_seqs, dtype=torch.long, device=self.device)
+            h_uniq = self.model.final_hidden(seq_t)
+            inv_t = torch.tensor(inv_idx, dtype=torch.long, device=self.device)
+            h = h_uniq[inv_t]
+
+            i_t = torch.tensor(items_arr, dtype=torch.long, device=self.device)
             item_emb = self.model.item_emb(i_t)
             scores = (h * item_emb).sum(dim=1).detach().cpu().numpy()
         return scores
@@ -642,6 +678,7 @@ class TrainConfig:
     sasrec_max_len: int = 50
     sasrec_heads: int = 2
     sasrec_layers: int = 2
+    sasrec_recent_steps: int = 5
     epochs: int = 20
     batch_size: int = 512
     lr: float = 1e-3
@@ -667,6 +704,7 @@ def build_model(cfg: TrainConfig) -> RecommenderBase:
             max_len=cfg.sasrec_max_len,
             num_layers=cfg.sasrec_layers,
             num_heads=cfg.sasrec_heads,
+            recent_steps=cfg.sasrec_recent_steps,
         )
     raise ValueError(f"Unsupported model: {cfg.model_name}")
 

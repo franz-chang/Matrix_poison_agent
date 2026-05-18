@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from matrix_poison.agent import MatrixPoisonAgent, MatrixPoisonConfig
 from matrix_poison.data import build_user_sequences, prepare_data
-from matrix_poison.metrics import hit_ndcg_at_k
+from matrix_poison.metrics import leave_one_out_hit_ndcg_at_k
 
 MODEL_ORDER = ["bpr", "neumf", "lightgcn", "sasrec"]
 MODEL_LABEL = {
@@ -47,12 +47,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--embedding-dim", type=int, default=64)
     p.add_argument("--lightgcn-layers", type=int, default=2)
     p.add_argument("--sasrec-max-len", type=int, default=50)
+    p.add_argument("--sasrec-recent-steps", type=int, default=0, help="SASRec one-step samples from recent transitions (<=0 means all).")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-6)
     p.add_argument("--min-positive-rating", type=float, default=1.0)
     p.add_argument("--positive-threshold", type=float, default=1.0)
     p.add_argument("--device", default="auto")
     p.add_argument("--decimals", type=int, default=4)
+    p.add_argument("--eval-user-limit", type=int, default=0, help="Max eval users per market (<=0 means all).")
     return p.parse_args()
 
 
@@ -153,6 +155,7 @@ def run_baseline_for_case(
         embedding_dim=int(args.embedding_dim),
         lightgcn_layers=int(args.lightgcn_layers),
         sasrec_max_len=int(args.sasrec_max_len),
+        sasrec_recent_steps=int(args.sasrec_recent_steps),
         lr=float(args.lr),
         weight_decay=float(args.weight_decay),
         k=int(args.k),
@@ -171,14 +174,14 @@ def run_baseline_for_case(
 
     clean_model = agent._train_model(agent.data.train, epochs=cfg.clean_epochs, seed_offset=0)
     clean_sequences = build_user_sequences(agent.data.train, cfg.sasrec_max_len)
-    quality = hit_ndcg_at_k(
+    quality = leave_one_out_hit_ndcg_at_k(
         model=clean_model,
-        users=agent.eval_users[: min(len(agent.eval_users), 1000)],
+        test_df=agent.data.test,
         train_user_items=agent.clean_train_user_items,
-        target_items=agent.target_items,
         num_items=agent.data.num_items,
         k=cfg.k,
         user_sequences=clean_sequences,
+        user_limit=int(args.eval_user_limit),
     )
 
     return {

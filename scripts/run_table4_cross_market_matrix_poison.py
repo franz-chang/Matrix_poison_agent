@@ -8,14 +8,17 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import sys
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from matrix_poison.attacks import AttackRequest, mixed_attack
 from matrix_poison.agent import MatrixPoisonAgent, MatrixPoisonConfig
-from matrix_poison.data import prepare_data
+from matrix_poison.data import append_malicious_rows, build_user_item_sets, build_user_sequences, prepare_data
+from matrix_poison.metrics import leave_one_out_hit_ndcg_at_k, prediction_shift
 
 MODEL_ORDER = ["bpr", "neumf", "lightgcn", "sasrec"]
 MODEL_LABEL = {
@@ -57,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--embedding-dim", type=int, default=64)
     p.add_argument("--lightgcn-layers", type=int, default=2)
     p.add_argument("--sasrec-max-len", type=int, default=50)
+    p.add_argument("--sasrec-recent-steps", type=int, default=0, help="SASRec one-step samples from recent transitions (<=0 means all).")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-6)
     p.add_argument("--profile-max-len", type=int, default=120)
@@ -70,8 +74,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--push-negative-penalty", type=float, default=3.0)
     p.add_argument("--push-target-shift", type=float, default=0.8)
     p.add_argument("--push-epsilon-max", type=float, default=0.5)
+    p.add_argument("--push-interaction-penalty", type=float, default=6.0)
+    p.add_argument("--push-max-interaction-ratio", type=float, default=1.02)
+    p.add_argument("--push-max-stealth-penalty", type=float, default=0.05)
     p.add_argument("--disable-push-shift-unseen-only", action="store_true")
     p.add_argument("--enable-camel", action="store_true", help="Enable CAMEL orchestrator. Disabled by default for reproducibility.")
+    p.add_argument("--final-eval-epochs", type=int, default=8, help="Epochs for final clean/poisoned retraining used in reported metrics.")
+    p.add_argument("--final-eval-user-limit", type=int, default=0, help="Final reported evaluation users limit (<=0 means all test users).")
+    p.add_argument(
+        "--push-final-eps-candidates",
+        default="",
+        help="Comma-separated epsilon multipliers for final push evaluation candidate selection (e.g., 0.5,1.0,1.5). Empty disables.",
+    )
     p.add_argument("--device", default="auto")
     p.add_argument("--decimals", type=int, default=4)
     return p.parse_args()
@@ -161,6 +175,21 @@ def fmt_or_keep(v: object, decimals: int = 4) -> str:
         return s
 
 
+def _parse_push_eps_candidates(raw: str) -> List[float]:
+    vals: List[float] = []
+    for token in str(raw or "").split(","):
+        t = token.strip()
+        if not t:
+            continue
+        try:
+            v = float(t)
+        except Exception:
+            continue
+        if v > 0:
+            vals.append(v)
+    return vals
+
+
 def run_attack_for_case(
     interactions: Path,
     items: Path,
@@ -193,6 +222,7 @@ def run_attack_for_case(
         embedding_dim=int(args.embedding_dim),
         lightgcn_layers=int(args.lightgcn_layers),
         sasrec_max_len=int(args.sasrec_max_len),
+        sasrec_recent_steps=int(args.sasrec_recent_steps),
         lr=float(args.lr),
         weight_decay=float(args.weight_decay),
         k=int(args.k),
@@ -208,6 +238,9 @@ def run_attack_for_case(
         push_shift_on_unseen_only=not bool(args.disable_push_shift_unseen_only),
         push_target_shift=float(args.push_target_shift),
         push_epsilon_max=float(args.push_epsilon_max),
+        push_interaction_penalty=float(args.push_interaction_penalty),
+        push_max_interaction_ratio=float(args.push_max_interaction_ratio),
+        push_max_stealth_penalty=float(args.push_max_stealth_penalty),
         camel_enabled=bool(args.enable_camel),
         seed=int(args.seed),
         device=str(args.device),
@@ -220,19 +253,111 @@ def run_attack_for_case(
     )
     result = agent.run()
     best = result.best_metrics or {}
+
+    malicious_rows = result.malicious_rows if result.malicious_rows is not None else pd.DataFrame(columns=data.train.columns)
+    poisoned_train = append_malicious_rows(data.train, malicious_rows)
+
+    # Optional push-side candidate search on poisoning strength, selected by val quality.
+    selected_push_eps_scale = 1.0
+    if intent == "push":
+        eps_scales = _parse_push_eps_candidates(args.push_final_eps_candidates)
+        if eps_scales:
+            val_users = sorted(set(data.val["user"].astype(int).tolist())) if not data.val.empty else sorted(set(data.test["user"].astype(int).tolist()))
+            val_users = val_users[: min(len(val_users), 2000)]
+            best_val_score = -1e18
+            best_rows = malicious_rows
+            for scale in eps_scales:
+                eps_try = float(np.clip(result.best_epsilon * scale, cfg.epsilon_min, cfg.push_epsilon_max))
+                req = AttackRequest(
+                    epsilon=eps_try,
+                    intent=cfg.intent,
+                    target_item=agent.target_item,
+                    target_items=sorted(agent.target_items),
+                    target_category_items=data.category_to_items[category],
+                    max_profile_len=agent._attack_profile_max_len(),
+                    seed=cfg.seed + 7000 + int(scale * 1000),
+                )
+                mal_try = mixed_attack(
+                    train_df=data.train,
+                    num_users=data.num_users,
+                    num_items=data.num_items,
+                    req=req,
+                    weights=result.best_weights,
+                )
+                poisoned_try = append_malicious_rows(data.train, mal_try)
+                model_try = agent._train_model(poisoned_try, epochs=max(2, int(args.final_eval_epochs // 2)), seed_offset=9300 + int(scale * 1000))
+                seq_try = build_user_sequences(poisoned_try, int(args.sasrec_max_len))
+                q_try = leave_one_out_hit_ndcg_at_k(
+                    model=model_try,
+                    test_df=data.val if not data.val.empty else data.test,
+                    train_user_items=build_user_item_sets(poisoned_try),
+                    num_items=data.num_items,
+                    k=int(args.k),
+                    user_sequences=seq_try,
+                    user_limit=len(val_users) if val_users else int(args.final_eval_user_limit),
+                )
+                val_score = float(q_try.get("hit", 0.0)) + float(q_try.get("ndcg", 0.0))
+                if val_score > best_val_score:
+                    best_val_score = val_score
+                    best_rows = mal_try
+                    selected_push_eps_scale = scale
+            malicious_rows = best_rows
+            poisoned_train = append_malicious_rows(data.train, malicious_rows)
+
+    # Re-train clean/poisoned models and report metrics with the same corrected
+    # leave-one-out protocol used by the baseline table.
+    final_epochs = int(args.final_eval_epochs)
+    clean_model = agent._train_model(data.train, epochs=final_epochs, seed_offset=9000)
+    poison_model = agent._train_model(poisoned_train, epochs=final_epochs, seed_offset=9100)
+
+    clean_seq = build_user_sequences(data.train, int(args.sasrec_max_len))
+    poison_seq = build_user_sequences(poisoned_train, int(args.sasrec_max_len))
+
+    poison_user_items = build_user_item_sets(poisoned_train)
+    quality = leave_one_out_hit_ndcg_at_k(
+        model=poison_model,
+        test_df=data.test,
+        train_user_items=poison_user_items,
+        num_items=data.num_items,
+        k=int(args.k),
+        user_sequences=poison_seq,
+        user_limit=int(args.final_eval_user_limit),
+    )
+
+    eval_users = sorted(set(data.test["user"].astype(int).tolist()))
+    if intent == "push" and not bool(args.disable_push_shift_unseen_only):
+        clean_user_items = build_user_item_sets(data.train)
+        unseen_users = [u for u in eval_users if int(target_item) not in clean_user_items.get(int(u), set())]
+        shift_users = unseen_users if unseen_users else eval_users
+    else:
+        shift_users = eval_users
+
+    p_shift = prediction_shift(
+        clean_model=clean_model,
+        poisoned_model=poison_model,
+        users=shift_users,
+        target_item=int(target_item),
+        clean_sequences=clean_seq,
+        poisoned_sequences=poison_seq,
+    )
+
     return {
-        "hit": float(best.get("hit", 0.0)),
-        "ndcg": float(best.get("ndcg", 0.0)),
-        "prediction_shift": float(best.get("prediction_shift", 0.0)),
+        "hit": float(quality.get("hit", 0.0)),
+        "ndcg": float(quality.get("ndcg", 0.0)),
+        "prediction_shift": float(p_shift),
         "objective": float(best.get("objective", 0.0)),
         "best_reward": float(result.best_reward),
         "best_iteration": int(result.best_iteration),
         "best_epsilon": float(result.best_epsilon),
+        "agent_best_hit": float(best.get("hit", 0.0)),
+        "agent_best_ndcg": float(best.get("ndcg", 0.0)),
+        "agent_best_prediction_shift": float(best.get("prediction_shift", 0.0)),
         "target_category": category,
         "target_item_index": int(target_item),
         "target_item_raw_id": data.index_to_item_id.get(int(target_item), "UNKNOWN"),
         "num_users": int(data.num_users),
         "num_items": int(data.num_items),
+        "selected_push_eps_scale": float(selected_push_eps_scale),
     }
 
 
@@ -348,7 +473,7 @@ def main() -> None:
                     continue
                 row[f"{market} Hit@10"] = fmt(float(r["hit"]), args.decimals)
                 row[f"{market} NDCG@10"] = fmt(float(r["ndcg"]), args.decimals)
-                row[f"{market} P. Shift"] = fmt(abs(float(r["prediction_shift"])), args.decimals)
+                row[f"{market} P. Shift"] = fmt(float(r["prediction_shift"]), args.decimals)
             rows.append(row)
 
     table_df = pd.DataFrame(rows)

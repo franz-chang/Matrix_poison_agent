@@ -21,6 +21,8 @@ DEVICE="${DEVICE:-auto}"
 CLEAN_EPOCHS="${CLEAN_EPOCHS:-20}"
 BATCH_SIZE="${BATCH_SIZE:-8192}"
 SASREC_BATCH_SIZE="${SASREC_BATCH_SIZE:-4096}"
+SASREC_RECENT_STEPS="${SASREC_RECENT_STEPS:-0}"
+EVAL_USER_LIMIT="${EVAL_USER_LIMIT:-0}"
 TARGET_CATEGORY="${TARGET_CATEGORY:-Action}"
 TARGET_ITEM_POLICY="${TARGET_ITEM_POLICY:-head}"
 TARGET_EVAL_SIZE="${TARGET_EVAL_SIZE:-1}"
@@ -36,8 +38,8 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 echo "[table4-baseline] ROOT_DIR=${ROOT_DIR}"
 echo "[table4-baseline] PYTHON_BIN=${PYTHON_BIN}"
 echo "[table4-baseline] SEED=${SEED} DEVICE=${DEVICE}"
-echo "[table4-baseline] BATCH_SIZE=${BATCH_SIZE} SASREC_BATCH_SIZE=${SASREC_BATCH_SIZE}"
-echo "[table4-baseline] TARGET_CATEGORY=${TARGET_CATEGORY} TARGET_ITEM_POLICY=${TARGET_ITEM_POLICY}"
+echo "[table4-baseline] BATCH_SIZE=${BATCH_SIZE} SASREC_BATCH_SIZE=${SASREC_BATCH_SIZE} SASREC_RECENT_STEPS=${SASREC_RECENT_STEPS}"
+echo "[table4-baseline] TARGET_CATEGORY=${TARGET_CATEGORY} TARGET_ITEM_POLICY=${TARGET_ITEM_POLICY} EVAL_USER_LIMIT=${EVAL_USER_LIMIT}"
 echo "[table4-baseline] OUT_DIR=${OUT_DIR}"
 if [[ -n "${XMARKET_ROOT}" ]]; then
   echo "[table4-baseline] XMARKET_ROOT=${XMARKET_ROOT}"
@@ -51,11 +53,13 @@ fi
   --clean-epochs "${CLEAN_EPOCHS}" \
   --batch-size "${BATCH_SIZE}" \
   --sasrec-batch-size "${SASREC_BATCH_SIZE}" \
+  --sasrec-recent-steps "${SASREC_RECENT_STEPS}" \
   --target-category "${TARGET_CATEGORY}" \
   --target-item-policy "${TARGET_ITEM_POLICY}" \
   --target-eval-size "${TARGET_EVAL_SIZE}" \
   --min-positive-rating 1.0 \
   --positive-threshold 1.0 \
+  --eval-user-limit "${EVAL_USER_LIMIT}" \
   --output-dir "${OUT_DIR}" \
   ${XMARKET_ROOT:+--xmarket-root "${XMARKET_ROOT}"}
 

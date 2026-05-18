@@ -70,6 +70,83 @@ def hit_ndcg_at_k(
     return {"hit": float(np.mean(hits)), "ndcg": float(np.mean(ndcgs))}
 
 
+def leave_one_out_hit_ndcg_at_k(
+    model: RecommenderBase,
+    test_df: pd.DataFrame,
+    train_user_items: Dict[int, Set[int]],
+    num_items: int,
+    k: int = 10,
+    user_sequences: Optional[Dict[int, List[int]]] = None,
+    user_limit: int = 0,
+) -> Dict[str, float]:
+    """Standard leave-one-out evaluation with all-item ranking.
+
+    Each user contributes one ground-truth test item, ranked against all
+    candidate items not seen in train for that user.
+    """
+    if test_df.empty:
+        return {"hit": 0.0, "ndcg": 0.0}
+
+    eval_df = test_df[["user", "item", "timestamp"]].copy()
+    eval_df = eval_df.sort_values(["user", "timestamp"], kind="mergesort").groupby("user", as_index=False).tail(1)
+    if user_limit > 0:
+        eval_df = eval_df.sort_values("user", kind="mergesort").head(int(user_limit))
+    if eval_df.empty:
+        return {"hit": 0.0, "ndcg": 0.0}
+
+    all_items = np.arange(num_items, dtype=np.int64)
+    hits = []
+    ndcgs = []
+
+    for row in eval_df.itertuples(index=False):
+        user = int(row.user)
+        target = int(row.item)
+        if target < 0 or target >= num_items:
+            continue
+
+        seen = set(train_user_items.get(user, set()))
+        # Exclude train items but keep the target candidate even if repeated logs exist.
+        if target in seen:
+            seen.remove(target)
+
+        mask = np.ones(num_items, dtype=bool)
+        if seen:
+            seen_arr = np.fromiter(seen, dtype=np.int64)
+            seen_arr = seen_arr[(seen_arr >= 0) & (seen_arr < num_items)]
+            mask[seen_arr] = False
+
+        candidates = all_items[mask]
+        if len(candidates) == 0:
+            continue
+
+        users_arr = np.full(len(candidates), user, dtype=np.int64)
+        scores = model.score(users_arr, candidates, user_sequences=user_sequences)
+        if len(scores) == 0:
+            continue
+
+        top_k = min(int(k), len(scores))
+        if top_k <= 0:
+            continue
+        top_idx = np.argpartition(-scores, kth=top_k - 1)[:top_k]
+        top_items = candidates[top_idx]
+        order = np.argsort(-scores[top_idx])
+        ranked = top_items[order]
+
+        matched = np.where(ranked == target)[0]
+        if matched.size == 0:
+            hits.append(0.0)
+            ndcgs.append(0.0)
+            continue
+
+        rank = int(matched[0])
+        hits.append(1.0)
+        ndcgs.append(float(1.0 / np.log2(rank + 2.0)))
+
+    if not hits:
+        return {"hit": 0.0, "ndcg": 0.0}
+    return {"hit": float(np.mean(hits)), "ndcg": float(np.mean(ndcgs))}
+
+
 def stealth_metrics(clean_train: pd.DataFrame, poisoned_train: pd.DataFrame) -> Dict[str, float]:
     if clean_train.empty or poisoned_train.empty:
         return {"rating_kl": 0.0, "profile_shift": 0.0, "interaction_ratio": 1.0}

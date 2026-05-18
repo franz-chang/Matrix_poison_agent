@@ -128,17 +128,17 @@ def _collect_cross_market(run_dir: Path) -> Dict[Tuple[str, str, str], dict]:
     return out
 
 
-def _collect_ablation(run_dir: Path) -> Dict[str, dict]:
-    out: Dict[str, dict] = {}
+def _collect_ablation(run_dir: Path) -> Dict[str, Dict[str, object]]:
+    out: Dict[str, Dict[str, object]] = {}
     base = run_dir / "5_6_ablation"
     for p in sorted(base.glob("*/run_summary.json")):
         name = p.parent.name
         if "_" not in name:
             continue
-        variant = name.split("_", 1)[1]
+        model, variant = name.split("_", 1)
         obj = _load_json(p)
         if obj:
-            out[variant] = obj
+            out[variant] = {"model": model, "summary": obj}
     return out
 
 
@@ -281,14 +281,16 @@ def build_table5_like(run_dir: Path, decimals: int) -> pd.DataFrame:
     }
     rows: List[dict] = []
     for k in order:
-        obj = ab.get(k)
-        if not obj:
+        item = ab.get(k)
+        if not item:
             continue
+        obj = item.get("summary", {})
+        model = str(item.get("model", "unknown"))
         bm = obj.get("best_metrics", {})
         rows.append(
             {
                 "Variant": label.get(k, k),
-                "Model": "lightgcn",
+                "Model": model,
                 "Hit@10": _fmt(bm.get("hit"), decimals),
                 "NDCG@10": _fmt(bm.get("ndcg"), decimals),
                 "P.Shift": _fmt(_abs_shift(bm.get("prediction_shift")), decimals),

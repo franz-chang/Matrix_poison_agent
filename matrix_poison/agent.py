@@ -34,6 +34,7 @@ class MatrixPoisonConfig:
     sasrec_max_len: int = 50
     sasrec_heads: int = 2
     sasrec_layers: int = 2
+    sasrec_recent_steps: int = 5
     k: int = 10
     stealth_lambda: float = 0.25
     shift_weight: float = 0.2
@@ -52,6 +53,9 @@ class MatrixPoisonConfig:
     push_shift_on_unseen_only: bool = True
     push_target_shift: float = 0.8
     push_epsilon_max: float = 0.5
+    push_interaction_penalty: float = 6.0
+    push_max_interaction_ratio: float = 1.02
+    push_max_stealth_penalty: float = 0.05
     enable_analysis_phase: bool = True
     enable_planning_phase: bool = True
     enable_judgment_phase: bool = True
@@ -203,12 +207,12 @@ class MatrixPoisonAgent:
     def _push_objective_weights(self) -> Tuple[float, float]:
         model = self.cfg.model_name.lower()
         if model == "lightgcn":
-            return 0.85, 0.35
+            return 0.65, 1.15
         if model == "neumf":
-            return 0.9, 0.35
+            return 0.70, 1.10
         if model == "sasrec":
-            return 0.75, 0.45
-        return 0.9, 0.4
+            return 0.60, 1.20
+        return 0.70, 1.10
 
     def _build_train_cfg(self, epochs: int, seed_offset: int = 0) -> TrainConfig:
         use_explicit_neg = self.cfg.push_use_explicit_neg if self._is_push() else self.cfg.nuke_use_explicit_neg
@@ -220,6 +224,7 @@ class MatrixPoisonAgent:
             sasrec_max_len=self.cfg.sasrec_max_len,
             sasrec_heads=self.cfg.sasrec_heads,
             sasrec_layers=self.cfg.sasrec_layers,
+            sasrec_recent_steps=self.cfg.sasrec_recent_steps,
             epochs=epochs,
             batch_size=self.cfg.batch_size,
             lr=self.cfg.lr,
@@ -317,7 +322,16 @@ class MatrixPoisonAgent:
                 clean_ndcg - float(quality["ndcg"]),
             )
         )
-        stealth_penalty = stealth["rating_kl"] + stealth["profile_shift"]
+        interaction_ratio = float(stealth.get("interaction_ratio", 1.0))
+        interaction_excess = max(0.0, interaction_ratio - 1.0)
+        if self._is_push():
+            stealth_penalty = (
+                float(stealth["rating_kl"])
+                + float(stealth["profile_shift"])
+                + float(self.cfg.push_interaction_penalty) * interaction_excess
+            )
+        else:
+            stealth_penalty = float(stealth["rating_kl"]) + float(stealth["profile_shift"])
         shift_term = objective_from_intent(self.cfg.intent, pred_shift)
         if self._is_push():
             rank_term = hit_delta + ndcg_delta
@@ -326,6 +340,11 @@ class MatrixPoisonAgent:
             if pred_shift <= self.cfg.push_min_shift:
                 # Hard guard for push: reject candidates with non-positive target shift.
                 obj -= self.cfg.push_negative_penalty * (self.cfg.push_min_shift - pred_shift + 1.0)
+            if clean_drop > self.cfg.clean_drop_tolerance:
+                # Penalize visible quality degradation in push mode.
+                obj -= self.cfg.push_negative_penalty * (
+                    clean_drop - self.cfg.clean_drop_tolerance + 0.1
+                )
         else:
             rank_term = (-hit_delta) + (-ndcg_delta)
             # For nuke, jointly optimize target-score suppression and rank collapse.
@@ -568,6 +587,8 @@ class MatrixPoisonAgent:
                     pass_judge
                     and metrics["clean_drop"] <= self.cfg.clean_drop_tolerance
                     and metrics["prediction_shift"] > self.cfg.push_min_shift
+                    and metrics["interaction_ratio"] <= self.cfg.push_max_interaction_ratio
+                    and metrics["stealth_penalty"] <= self.cfg.push_max_stealth_penalty
                 )
             iter_res = IterationResult(
                 iteration=it,
@@ -608,7 +629,10 @@ class MatrixPoisonAgent:
                 iter_res.pass_judge = True
 
             if self._is_push():
-                candidate_valid = metrics["prediction_shift"] > self.cfg.push_min_shift
+                candidate_valid = (
+                    metrics["prediction_shift"] > self.cfg.push_min_shift
+                    and metrics["clean_drop"] <= max(self.cfg.clean_drop_tolerance, 0.12)
+                )
             else:
                 # Nuke candidates should preferably produce negative target shift.
                 candidate_valid = metrics["prediction_shift"] < 0.0
@@ -622,7 +646,19 @@ class MatrixPoisonAgent:
                     cur_shift = float(metrics.get("prediction_shift", 1e18))
                     should_update_best = (cur_shift < prev_shift - 1e-8) or (abs(cur_shift - prev_shift) <= 1e-8 and metrics["reward"] > best_reward)
             else:
-                should_update_best = (not has_valid_best) and (metrics["reward"] > best_reward)
+                if self._is_push() and not has_valid_best:
+                    prev_stealth = float(best_metrics.get("stealth_penalty", 1e18)) if best_metrics else 1e18
+                    prev_abs_shift = abs(float(best_metrics.get("prediction_shift", 1e18))) if best_metrics else 1e18
+                    cur_abs_shift = abs(float(metrics.get("prediction_shift", 1e18)))
+                    should_update_best = (
+                        metrics["stealth_penalty"] < prev_stealth - 1e-9
+                        or (
+                            abs(float(metrics["stealth_penalty"]) - prev_stealth) <= 1e-9
+                            and cur_abs_shift < prev_abs_shift
+                        )
+                    )
+                else:
+                    should_update_best = (not has_valid_best) and (metrics["reward"] > best_reward)
             if should_update_best:
                 best_reward = float(metrics["reward"])
                 best_iter = it

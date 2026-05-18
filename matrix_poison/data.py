@@ -98,6 +98,15 @@ def prepare_data(
     if inter.empty:
         raise ValueError("No positive interactions left after rating thresholding.")
 
+    # De-duplicate repeated (user, item) logs to avoid train/val/test leakage on
+    # the same interaction pair when users re-rate the same item multiple times.
+    inter["_orig_order"] = np.arange(len(inter), dtype=np.int64)
+    if inter["timestamp"].notna().any():
+        inter = inter.sort_values([user_col, item_col, "timestamp", "_orig_order"], kind="mergesort")
+    else:
+        inter = inter.sort_values([user_col, item_col, "_orig_order"], kind="mergesort")
+    inter = inter.drop_duplicates(subset=[user_col, item_col], keep="last").drop(columns=["_orig_order"])
+
     user_map, rev_user_map = _build_mapping(inter[user_col])
     item_map, rev_item_map = _build_mapping(inter[item_col])
 
