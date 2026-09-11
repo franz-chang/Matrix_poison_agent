@@ -8,6 +8,12 @@
 3. `Planning + Judging`：按排序生成混合策略，快速验证目标效果与隐蔽性
 4. `Self-evolving`：根据反馈执行 `epsilon` 调节、`Mode Switching`、`Distribution Hybridization`
 
+## 方法示意图
+
+下图对比了传统的单物品级 Nuke 攻击与 Matrix-Poison 的类别级 Nuke 设置：
+
+![Matrix-Poison schematic diagram](schematic_diagram.png)
+
 ## 目录
 
 - `matrix_poison/agent.py`：核心 Agent 闭环
