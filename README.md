@@ -1,44 +1,45 @@
 # Matrix-Poison Reproduction
 
-基于论文 **Self-Evolving Matrix-Poison Agent on Recommender System** 的工程复现实现。  
-该实现覆盖论文中的核心流程：
+An engineering reproduction based on the paper **Self-Evolving Matrix-Poison Agent on Recommender System**.
 
-1. `Initialization`：场景统计 + 初始启发式攻击
-2. `Analysis Phase`：对 `Random / Average / Bandwagon / Segmented` 做探测攻击并计算脆弱性排序
-3. `Planning + Judging`：按排序生成混合策略，快速验证目标效果与隐蔽性
-4. `Self-evolving`：根据反馈执行 `epsilon` 调节、`Mode Switching`、`Distribution Hybridization`
+This implementation covers the paper’s core workflow:
 
-## 方法示意图
+1. `Initialization`: Scenario statistics and an initial heuristic attack
+2. `Analysis Phase`: Probe attacks using `Random / Average / Bandwagon / Segmented`, followed by vulnerability ranking
+3. `Planning + Judging`: Generate a hybrid strategy based on the ranking, then quickly validate its target impact and stealth
+4. `Self-evolving`: Adjust `epsilon`, switch modes, and hybridize distributions based on feedback
 
-下图对比了传统的单物品级 Nuke 攻击与 Matrix-Poison 的类别级 Nuke 设置：
+## Method Overview
+
+The figure below compares traditional item-level Nuke attacks with Matrix-Poison’s category-level Nuke setup:
 
 ![Matrix-Poison schematic diagram](schematic_diagram.png)
 
-## 目录
+## Directory Structure
 
-- `matrix_poison/agent.py`：核心 Agent 闭环
-- `matrix_poison/attacks.py`：四种基础攻击 + 混合器
-- `matrix_poison/models.py`：`BPR / NeuMF / LightGCN / SASRec` 训练与打分
-- `matrix_poison/metrics.py`：`Hit@K / NDCG@K / Prediction Shift / Stealth`
-- `scripts/run_matrix_poison.py`：主实验脚本
-- `scripts/preprocess_movielens1m.py`：MovieLens-1M 转换脚本
-- `scripts/make_synthetic_dataset.py`：生成可快速验证的合成数据
+- `matrix_poison/agent.py`: Core Agent loop
+- `matrix_poison/attacks.py`: Four basic attack methods and the hybridizer
+- `matrix_poison/models.py`: Training and scoring for `BPR / NeuMF / LightGCN / SASRec`
+- `matrix_poison/metrics.py`: `Hit@K / NDCG@K / Prediction Shift / Stealth`
+- `scripts/run_matrix_poison.py`: Main experiment script
+- `scripts/preprocess_movielens1m.py`: MovieLens-1M conversion script
+- `scripts/make_synthetic_dataset.py`: Script to generate a synthetic dataset for quick validation
 
-## 数据格式
+## Data Format
 
-### interactions.csv
+### `interactions.csv`
 
 - `user_id`
 - `item_id`
 - `rating`
-- `timestamp`（可选，建议保留）
+- `timestamp` (optional; recommended)
 
-### items.csv
+### `items.csv`
 
 - `item_id`
 - `category`
 
-## 快速开始
+## Quick Start
 
 ```bash
 pip install -r requirements.txt
@@ -52,7 +53,7 @@ python scripts/run_matrix_poison.py \
   --output-dir outputs/synth_run
 ```
 
-## MovieLens-1M 示例
+## MovieLens-1M Example
 
 ```bash
 python scripts/preprocess_movielens1m.py \
@@ -73,41 +74,40 @@ python scripts/run_matrix_poison.py \
   --output-dir outputs/ml1m_lightgcn_nuke
 ```
 
-## 输出结果
+## Output Files
 
 - `run_summary.json`
-  - clean 基线指标
-  - 最优迭代、最优策略权重、最优 epsilon
-  - 每轮迭代指标（objective / stealth / reward）
+  - Clean baseline metrics
+  - Best iteration, best strategy weights, and best epsilon
+  - Metrics for each iteration (`objective / stealth / reward`)
 - `best_malicious_profiles.csv`
-  - 最优毒化样本（可直接注入训练集）
+  - Best poisoning samples, ready to be injected into the training set
 
-## 说明
+## Notes
 
-- 论文原文中的 LLM-分析器/规划器这里实现为可运行的“规则化语义梯度”闭环；  
-  如果需要接入真实 LLM API，可在 `matrix_poison/agent.py` 的 `analysis_phase` 和 `self_evolve` 扩展提示优化逻辑。
-- 默认遵循论文的灰盒设定：只基于可见交互数据训练本地 shadow/victim，不访问目标系统梯度与参数。
+- The LLM analyzer and planner in the original paper are implemented here as a runnable, rule-based “semantic gradient” loop.
+  If you want to connect a real LLM API, extend the prompt-optimization logic in `analysis_phase` and `self_evolve` in `matrix_poison/agent.py`.
+- The implementation follows the paper’s gray-box setting by default: it trains local shadow/victim models using only visible interaction data, without accessing the target system’s gradients or parameters.
 
-## CAMEL-AI 多 Agent 改写
+## CAMEL-AI Multi-Agent Rewrite
 
-当前实现已接入 CAMEL-AI 作为分析 / 规划 / 判断 / 自进化四阶段编排层：
+The current implementation integrates CAMEL-AI as the orchestration layer for the analysis, planning, judgment, and self-evolving stages:
 
-- `matrix_poison/camel_orchestrator.py`：CAMEL 角色编排与 JSON 决策接口
-- `matrix_poison/agent.py`：在每轮迭代调用 CAMEL 决策（带鲁棒 fallback）
+- `matrix_poison/camel_orchestrator.py`: CAMEL role orchestration and JSON decision interface
+- `matrix_poison/agent.py`: Calls CAMEL for decisions on each iteration, with a robust fallback
 
-默认行为：
+Default behavior:
 
-- 若环境中有 `OPENAI_API_KEY`，将使用 `--camel-model` 指定模型（默认 `openai:gpt-4o-mini`）
-- 若未设置 API Key，默认使用 CAMEL `STUB` 后端并自动回退规则策略，保证实验可跑通
+- If `OPENAI_API_KEY` is available in the environment, the model specified by `--camel-model` will be used (defaults to `openai:gpt-4o-mini`).
+- If no API key is set, the CAMEL `STUB` backend is used by default, with automatic fallback to the rule-based strategy to ensure the experiment runs.
 
-可用参数（`scripts/run_matrix_poison.py`）：
+Available options in `scripts/run_matrix_poison.py`:
 
 - `--disable-camel`
 - `--camel-model openai:gpt-4o-mini`
 - `--camel-no-stub-fallback`
 - `--disable-analysis-phase / --disable-planning-phase / --disable-judgment-phase / --disable-self-evolving`
 - `--fixed-attack-method random|average|bandwagon|segmented`
-
 
 ## Train Baseline Target Models
 
@@ -128,45 +128,45 @@ This produces:
 - `checkpoints/target_models/ml1m/sasrec_baseline.pt`
 - `checkpoints/target_models/ml1m/manifest.json`
 
-## 按论文顺序一键实验
+## Run Experiments in Paper Order
 
-新增脚本 `scripts/run_paper_order_experiments.py`，按论文章节顺序执行：
+The new script `scripts/run_paper_order_experiments.py` runs experiments in the order of the paper’s sections:
 
-1. `5.3.1` 单市场攻击有效性（RQ1）
-2. `5.3.2` 与基线方法对比（RQ1 扩展）
-3. `5.4` 跨市场攻击有效性（RQ2）
-4. `5.5` 隐蔽性评估（RQ3）
-5. `5.6` 消融实验（并生成 RQ4 脆弱性汇总）
+1. `5.3.1` Attack effectiveness in a single market (RQ1)
+2. `5.3.2` Comparison with baseline methods (RQ1 extension)
+3. `5.4` Cross-market attack effectiveness (RQ2)
+4. `5.5` Stealth evaluation (RQ3)
+5. `5.6` Ablation study (also generates the RQ4 vulnerability summary)
 
-示例（快速版）：
+Example (quick version):
 
 ```bash
 python scripts/run_paper_order_experiments.py --quick
 ```
 
-输出包含：
+Outputs include:
 
 - `paper_order_report.md`
 - `paper_order_all_results.csv`
 - `5_5_stealthiness.csv`
 - `rq4_vulnerability_summary.csv`
 
-## 已补充数据集（LastFM + Automotive）
+## Additional Datasets (LastFM + Automotive)
 
-当前项目已补充以下可直接运行的数据：
+The following datasets have been added and are ready to use:
 
 - `data/lastfm/interactions.csv`
 - `data/lastfm/items.csv`
 - `data/automotive/interactions.csv`
 - `data/automotive/items.csv`
 
-可复用构建脚本：
+Dataset build script:
 
 ```bash
 python scripts/build_matrix_poison_datasets.py
 ```
 
-说明：
+Notes:
 
-- LastFM 使用 `hetrec2011-lastfm-2k`，并基于 `user_taggedartists` + `tags` 构造 item 类别。
-- Automotive 使用 Amazon Automotive 评分源（本地已保存为 `data/raw/automotive/raw.data`），类别统一为 `Automotive`。
+- LastFM uses `hetrec2011-lastfm-2k`, with item categories constructed from `user_taggedartists` and `tags`.
+- Automotive uses the Amazon Automotive ratings source (saved locally as `data/raw/automotive/raw.data`), with the category standardized as `Automotive`.
